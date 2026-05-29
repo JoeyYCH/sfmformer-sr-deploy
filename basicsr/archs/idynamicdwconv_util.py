@@ -1,28 +1,21 @@
-"""
-    code from github: https://github.com/Atten4Vis/DemystifyLocalViT
-    Thanks to the bravo job from Han, Qi and Fan, Zejia and Dai, Qi and Sun, Lei and Cheng, Ming-Ming and Liu, Jiaying and Wang, Jingdong
-    Paper: "On the Connection between Local Attention and Dynamic Depth-wise Convolution" ICLR 2022 Spotlight
-"""
-
-
-"""
-@inproceedings{han2021connection,
-  title={On the Connection between Local Attention and Dynamic Depth-wise Convolution},
-  author={Han, Qi and Fan, Zejia and Dai, Qi and Sun, Lei and Cheng, Ming-Ming and Liu, Jiaying and Wang, Jingdong},
-  booktitle={International Conference on Learning Representations},
-  year={2022}
-}
-"""
-
-
 from torch.autograd import Function
 import torch
 from torch.nn.modules.utils import _pair
 import torch.nn as nn
 
 from collections import namedtuple
-import cupy     # idynamic implement is based on cupy-cuda
 from string import Template
+
+# -----------------------------------------------------------------------------
+# CuPy 是 GPU 用的 JIT kernel 編譯器。Pi/CPU-only 環境裝不起來,包成 try/except.
+# 所有 cupy 相依路徑(@cupy._util.memoize、cupy.RawModule、Stream(cuda_stream))
+# 都用 _HAS_CUPY 守衛起來;CPU 環境會走 _idynamic_cuda 裡的 PyTorch fallback.
+# -----------------------------------------------------------------------------
+try:
+    import cupy
+    _HAS_CUPY = True
+except Exception:
+    _HAS_CUPY = False
 
 Stream = namedtuple('Stream', ['ptr'])
 
@@ -34,31 +27,27 @@ def Dtype(t):
         return 'double'
 
 
-@cupy._util.memoize(for_each_device=True)
-def load_kernel(kernel_name, code, **kwargs):
-    code = Template(code).substitute(**kwargs)
-    kernel_code = cupy.RawModule(code=code)
-    return kernel_code.get_function(kernel_name)
+# -----------------------------------------------------------------------------
+# load_kernel: JIT 編譯 CUDA C 字串.
+# CuPy 不存在時提供 stub,import 階段不會 NameError;真的被呼叫到時才 raise.
+# 因為 CPU fallback 走 _idynamic_cuda 的另一條 branch,這個 stub 不會被觸發.
+# -----------------------------------------------------------------------------
+if _HAS_CUPY:
+    @cupy._util.memoize(for_each_device=True)
+    def load_kernel(kernel_name, code, **kwargs):
+        code = Template(code).substitute(**kwargs)
+        kernel_code = cupy.RawModule(code=code)
+        return kernel_code.get_function(kernel_name)
+else:
+    def load_kernel(kernel_name, code, **kwargs):
+        raise RuntimeError(
+            "load_kernel requires CuPy/CUDA; this environment is CPU-only. "
+            "If you reached this error, the CPU fallback in _idynamic_cuda "
+            "did not catch your code path."
+        )
 
 
-CUDA_NUM_THREADS = 1024
-# if you use in 3090 and above, please set 1024 for the fastest calculation
-# CUDA_NUM_THREADS = 1024   # FIXME: cuda
-
-
-kernel_loop = '''
-#define CUDA_KERNEL_LOOP(i, n)                        \
-  for (int i = blockIdx.x * blockDim.x + threadIdx.x; \
-      i < (n);                                       \
-      i += blockDim.x * gridDim.x)
-'''
-
-
-def GET_BLOCKS(N):
-    return (N + CUDA_NUM_THREADS - 1) // CUDA_NUM_THREADS
-
-
-_idynamic_kernel = kernel_loop + '''
+_idynamic_kernel = '''
 extern "C"
 __global__ void idynamic_forward_kernel(
 const ${Dtype}* bottom_data, const ${Dtype}* weight_data, ${Dtype}* top_data) {
@@ -79,9 +68,9 @@ const ${Dtype}* bottom_data, const ${Dtype}* weight_data, ${Dtype}* top_data) {
           && (w_in >= 0) && (w_in < ${bottom_width})) {
           const int offset = ((n * ${channels} + c) * ${bottom_height} + h_in)
             * ${bottom_width} + w_in;
-          const int offset_weight = ((((n * ${groups} + g) * ${kernel_h} + kh) * ${kernel_w} + kw) * ${top_height} + h)
+          const int weight_offset = (((((n * ${groups} + g) * ${kernel_h}) + kh) * ${kernel_w} + kw) * ${top_height} + h)
             * ${top_width} + w;
-          value += weight_data[offset_weight] * bottom_data[offset];
+          value += weight_data[weight_offset] * bottom_data[offset];
         }
       }
     }
@@ -90,7 +79,7 @@ const ${Dtype}* bottom_data, const ${Dtype}* weight_data, ${Dtype}* top_data) {
 }
 '''
 
-_idynamic_kernel_backward_grad_input = kernel_loop + '''
+_idynamic_kernel_backward_grad_input = '''
 extern "C"
 __global__ void idynamic_backward_grad_input_kernel(
     const ${Dtype}* const top_diff, const ${Dtype}* const weight_data, ${Dtype}* const bottom_diff) {
@@ -114,9 +103,9 @@ __global__ void idynamic_backward_grad_input_kernel(
                 && (w_out >= 0) && (w_out < ${top_width})) {
             const int offset = ((n * ${channels} + c) * ${top_height} + h_out)
                   * ${top_width} + w_out;
-            const int offset_weight = ((((n * ${groups} + g) * ${kernel_h} + kh) * ${kernel_w} + kw) * ${top_height} + h_out)
-                  * ${top_width} + w_out;
-            value += weight_data[offset_weight] * top_diff[offset];
+            const int weight_offset = (((((n * ${groups} + g) * ${kernel_h}) + kh) * ${kernel_w} + kw) * ${top_height} + h_out)
+            * ${top_width} + w_out;
+            value += weight_data[weight_offset] * top_diff[offset];
           }
         }
       }
@@ -126,7 +115,7 @@ __global__ void idynamic_backward_grad_input_kernel(
 }
 '''
 
-_idynamic_kernel_backward_grad_weight = kernel_loop + '''
+_idynamic_kernel_backward_grad_weight = '''
 extern "C"
 __global__ void idynamic_backward_grad_weight_kernel(
     const ${Dtype}* const top_diff, const ${Dtype}* const bottom_data, ${Dtype}* const buffer_data) {
@@ -160,7 +149,19 @@ __global__ void idynamic_backward_grad_weight_kernel(
 '''
 
 
+CUDA_NUM_THREADS = 512
+# if you use in 3090 and above, please set 1024 for the fastest calculation
+def GET_BLOCKS(N, NUM_THREADS=CUDA_NUM_THREADS):
+    return (N + NUM_THREADS - 1) // NUM_THREADS
+
+
 class _idynamic(Function):
+    """
+    GPU-only autograd Function backed by hand-written CUDA kernels via CuPy.
+    On CPU, _idynamic_cuda below routes around this class entirely (uses the
+    PyTorch fallback in pft_cpu_ops.idynamic_conv), so this class only needs
+    to be importable -- its forward/backward will never run on CPU.
+    """
     @staticmethod
     def forward(ctx, input, weight, stride, padding, dilation):
         assert input.dim() == 4 and input.is_cuda
@@ -245,18 +246,19 @@ class _idynamic(Function):
 
 
 def _idynamic_cuda(input, weight, bias=None, stride=1, padding=0, dilation=1):
-    """ idynamic kernel
-    """
+    """idynamic kernel - CUDA 上用自訂 kernel,CPU 上用 PyTorch fallback."""
     assert input.size(0) == weight.size(0)
-    assert input.size(-2) // stride == weight.size(-2)
-    assert input.size(-1) // stride == weight.size(-1)
-    if input.is_cuda:
+    assert input.size(-2) // _pair(stride)[0] == weight.size(-2)
+    assert input.size(-1) // _pair(stride)[1] == weight.size(-1)
+    if input.is_cuda and _HAS_CUPY:
         out = _idynamic.apply(input, weight, _pair(stride), _pair(padding), _pair(dilation))
         if bias is not None:
-            out += bias.view(1, -1, 1, 1)
-    else:
-        raise NotImplementedError
-    return out
+            out = out + bias.view(1, -1, 1, 1)
+        return out
+    # CPU / non-CUPY 環境:純 PyTorch 實作
+    from .pft_cpu_ops import idynamic_conv
+    return idynamic_conv(input, weight, bias=bias,
+                         stride=stride, padding=padding, dilation=dilation)
 
 
 class IDynamicDWConv(nn.Module):
@@ -267,13 +269,6 @@ class IDynamicDWConv(nn.Module):
                  channels,
                  kernel_size,
                  group_channels, bias=True):
-        """
-            code based on github: https://github.com/Atten4Vis/DemystifyLocalViT
-        :param channels: the feature
-        :param kernel_size: as window_size
-        :param group_channels: as num_heads
-        :param bias: bias for the conv in the HyperNet; Default: True
-        """
         super(IDynamicDWConv, self).__init__()
         self.kernel_size = kernel_size
         self.channels = channels
@@ -282,22 +277,12 @@ class IDynamicDWConv(nn.Module):
         self.groups = self.channels // self.group_channels
         self.conv1 = nn.Sequential(
             nn.Conv2d(channels, channels // reduction_ratio, 1, bias=bias),
-            # we give up LayerNorm and GELU since it is unnecessary in the HyperNet
-            # and we found that it is more efficient and resulting in better performance
-
-            # LayerNorm(channels // reduction_ratio, LayerNorm_type='WithBias'),
-            # nn.GELU(),
-
-            # we add a depth-wise conv in the HyperNet
-            # so that it can make full use of the information in its 7x7 windows
             nn.Conv2d(channels // reduction_ratio, channels // reduction_ratio, kernel_size=kernel_size,
                       padding=kernel_size//2, groups=channels//reduction_ratio, bias=bias),
         )
         self.conv2 = nn.Sequential(
             nn.Conv2d(channels // reduction_ratio, kernel_size ** 2 * self.groups, 1, bias=bias)
         )
-        # we give up bias because its limited performance and additional parameters
-        # self.bias = nn.Parameter(torch.rand(self.channels))
 
     def forward(self, x):
         weight = self.conv2(self.conv1(x))
@@ -305,6 +290,7 @@ class IDynamicDWConv(nn.Module):
         weight = weight.view(b, self.groups, self.kernel_size, self.kernel_size, h, w)
         out = _idynamic_cuda(x, weight, stride=1, padding=(self.kernel_size - 1) // 2)
         return out
+
 
 class IDynamic(nn.Module):
     """
@@ -314,13 +300,6 @@ class IDynamic(nn.Module):
                  channels,
                  kernel_size,
                  group_channels, bias=True):
-        """
-            code based on github: https://github.com/Atten4Vis/DemystifyLocalViT
-        :param channels: the feature
-        :param kernel_size: as window_size
-        :param group_channels: as num_heads
-        :param bias: bias for the conv in the HyperNet; Default: True
-        """
         super(IDynamic, self).__init__()
         self.kernel_size = kernel_size
         self.channels = channels
@@ -329,22 +308,12 @@ class IDynamic(nn.Module):
         self.groups = self.channels // self.group_channels
         self.conv1 = nn.Sequential(
             nn.Conv2d(channels, channels // reduction_ratio, 1, bias=bias),
-            # we give up LayerNorm and GELU since it is unnecessary in the HyperNet
-            # and we found that it is more efficient and resulting in better performance
-
-            # LayerNorm(channels // reduction_ratio, LayerNorm_type='WithBias'),
-            # nn.GELU(),
-
-            # we add a depth-wise conv in the HyperNet
-            # so that it can make full use of the information in its 7x7 windows
             nn.Conv2d(channels // reduction_ratio, channels // reduction_ratio, kernel_size=kernel_size,
                       padding=kernel_size//2, groups=channels//reduction_ratio, bias=bias),
         )
         self.conv2 = nn.Sequential(
             nn.Conv2d(channels // reduction_ratio, kernel_size ** 2 * self.groups, 1, bias=bias)
         )
-        # we give up bias because its limited performance and additional parameters
-        # self.bias = nn.Parameter(torch.rand(self.channels))
 
     def forward(self, x_main, x):
         weight = self.conv2(self.conv1(x))
@@ -352,4 +321,3 @@ class IDynamic(nn.Module):
         weight = weight.view(b, self.groups, self.kernel_size, self.kernel_size, h, w)
         out = _idynamic_cuda(x_main, weight, stride=1, padding=(self.kernel_size - 1) // 2)
         return out
-
