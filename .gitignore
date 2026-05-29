@@ -1,0 +1,85 @@
+# =============================================================================
+# .gitignore for sfmformer-sr-deploy
+# =============================================================================
+
+# Python build / cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# CUDA build artifacts (Windows-specific, not portable)
+*.dll
+*.lib
+*.exp
+*.obj
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# Compiled extension binaries (each user needs to build their own)
+ops_smm/build/
+ops_smm/smm_cuda.cp*.pyd
+ops_smm/smm_cuda.cp*.so
+ops_smm/cudart*.dll
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / temp / runs
+*.log
+results/
+tb_logger/
+wandb/
+runs/
+
+# Datasets (users provide their own)
+datasets/
+DIV2K/
+Set5/
+Set14/
+BSD100/
+B100/
+Urban100/
+Manga109/
+TestDataSR/
+*.rar
+*.zip
+*.7z
+*.tar.gz
+
+# Personal backups / scratch
+備份/
+backup/
+old/
+*_backup/
+*_bak.py
+*.bak
+
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Checkpoints not tracked in git (too large; provide externally)
+*.pth
+*.ckpt
+*.pt
+experiments/pretrained_models/*.pth
