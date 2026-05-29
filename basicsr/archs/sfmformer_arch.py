@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 import torch.nn.functional as F
 from basicsr.archs.arch_util import to_2tuple, trunc_normal_
+from .sfmformer_cpu_ops import SMM_QmK, SMM_AmV
 from fairscale.nn import checkpoint_wrapper
 from basicsr.utils.registry import ARCH_REGISTRY
 from torch.autograd import Function
@@ -19,41 +20,41 @@ import pywt
 from einops import rearrange
 from torch.autograd import Function
 from .idynamicdwconv_util import *
-import smm_cuda
+# import smm_cuda
 
 
 # ====================== SMM CUDA Ops ======================
 
-class SMM_QmK(Function):
-    @staticmethod
-    def forward(ctx, A, B, index):
-        ctx.save_for_backward(A, B, index)
-        return smm_cuda.SMM_QmK_forward_cuda(A.contiguous(), B.contiguous(), index.contiguous())
+# class SMM_QmK(Function):
+#     @staticmethod
+#     def forward(ctx, A, B, index):
+#         ctx.save_for_backward(A, B, index)
+#         return smm_cuda.SMM_QmK_forward_cuda(A.contiguous(), B.contiguous(), index.contiguous())
 
-    @staticmethod
-    @once_differentiable
-    def backward(ctx, grad_output):
-        A, B, index = ctx.saved_tensors
-        grad_A, grad_B = smm_cuda.SMM_QmK_backward_cuda(
-            grad_output.contiguous(), A.contiguous(), B.contiguous(), index.contiguous()
-        )
-        return grad_A, grad_B, None
+#     @staticmethod
+#     @once_differentiable
+#     def backward(ctx, grad_output):
+#         A, B, index = ctx.saved_tensors
+#         grad_A, grad_B = smm_cuda.SMM_QmK_backward_cuda(
+#             grad_output.contiguous(), A.contiguous(), B.contiguous(), index.contiguous()
+#         )
+#         return grad_A, grad_B, None
 
 
-class SMM_AmV(Function):
-    @staticmethod
-    def forward(ctx, A, B, index):
-        ctx.save_for_backward(A, B, index)
-        return smm_cuda.SMM_AmV_forward_cuda(A.contiguous(), B.contiguous(), index.contiguous())
+# class SMM_AmV(Function):
+#     @staticmethod
+#     def forward(ctx, A, B, index):
+#         ctx.save_for_backward(A, B, index)
+#         return smm_cuda.SMM_AmV_forward_cuda(A.contiguous(), B.contiguous(), index.contiguous())
 
-    @staticmethod
-    @once_differentiable
-    def backward(ctx, grad_output):
-        A, B, index = ctx.saved_tensors
-        grad_A, grad_B = smm_cuda.SMM_AmV_backward_cuda(
-            grad_output.contiguous(), A.contiguous(), B.contiguous(), index.contiguous()
-        )
-        return grad_A, grad_B, None
+#     @staticmethod
+#     @once_differentiable
+#     def backward(ctx, grad_output):
+#         A, B, index = ctx.saved_tensors
+#         grad_A, grad_B = smm_cuda.SMM_AmV_backward_cuda(
+#             grad_output.contiguous(), A.contiguous(), B.contiguous(), index.contiguous()
+#         )
+#         return grad_A, grad_B, None
 
 
 # ====================== DFE  ======================
