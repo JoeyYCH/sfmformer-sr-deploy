@@ -256,7 +256,7 @@ def _idynamic_cuda(input, weight, bias=None, stride=1, padding=0, dilation=1):
             out = out + bias.view(1, -1, 1, 1)
         return out
     # CPU / non-CUPY 環境:純 PyTorch 實作
-    from .pft_cpu_ops import idynamic_conv
+    from .sfmformer_cpu_ops import idynamic_conv
     return idynamic_conv(input, weight, bias=bias,
                          stride=stride, padding=padding, dilation=dilation)
 
