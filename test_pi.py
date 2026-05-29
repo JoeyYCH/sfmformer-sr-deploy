@@ -1,22 +1,4 @@
-"""
-test_pi.py
-================
-Phase 2 PSNR/SSIM validation on Pi: load GPU-trained checkpoint, reproduce
-paper numbers using PFTModel's exact patch-wise inference and BasicSR's
-exact PSNR/SSIM formulas.
 
-Two key behaviours that must mirror the original training/testing pipeline:
-
-  1. Patch-wise inference with overlap, exactly as `PFTModel.test()` does.
-  2. PSNR / SSIM identical to BasicSR's `calculate_psnr` / `calculate_ssim`
-     with `test_y_channel=True` (the standard SR community convention).
-
-Usage
------
-    python inference_pi.py --scale 2                   # Set5 ×2 default
-    python inference_pi.py --scale 2 --benchmark Set14
-    python inference_pi.py --scale 4 --save            # also save SR images
-"""
 from __future__ import annotations
 
 import argparse
@@ -34,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 
 # =============================================================================
-# Model config -- mirrors options/test/PFT/test_PFT_lightweight.yml exactly.
+# Model config -- mirrors options/test/101_SFMformer_SRx2_scratch.yml exactly.
 # =============================================================================
-PFT_LIGHT_CONFIG = dict(
+SFMFORMER_LIGHT_CONFIG = dict(
     in_chans=3,
     img_size=64,
     embed_dim=52,
@@ -60,9 +42,9 @@ PFT_LIGHT_CONFIG = dict(
 )
 
 CHECKPOINT_MAP = {
-    2: '101_PFT_light_SRx2_scratch(DFE_WMA)v2.pth',
-    3: '102_PFT_light_SRx3_finetune(DFE_WMA)v2.pth',
-    4: '103_PFT_light_SRx4_finetune(DFE_WMA)v2.pth',
+    2: '101_SFMformer_SRx2_scratch.pth',
+    3: '102_SFMformer_SRx3_finetune.pth',
+    4: '103_SFMformer_SRx4_finetune.pth',
 }
 
 
@@ -70,13 +52,11 @@ CHECKPOINT_MAP = {
 # Image <-> tensor helpers
 # =============================================================================
 def img2tensor(img_uint8_rgb: np.ndarray) -> torch.Tensor:
-    """uint8 H×W×3 RGB  ->  float32 (1, 3, H, W) in [0, 1]."""
     t = torch.from_numpy(img_uint8_rgb).permute(2, 0, 1).float() / 255.0
     return t.unsqueeze(0)
 
 
 def tensor2img(t: torch.Tensor) -> np.ndarray:
-    """float (1, 3, H, W) in [0, 1]  ->  uint8 H×W×3 RGB."""
     arr = t.squeeze(0).clamp(0, 1).permute(1, 2, 0).cpu().numpy()
     return (arr * 255.0).round().astype(np.uint8)
 
@@ -85,14 +65,12 @@ def tensor2img(t: torch.Tensor) -> np.ndarray:
 # BasicSR-exact PSNR
 # =============================================================================
 def to_y_channel(img_uint8_rgb: np.ndarray) -> np.ndarray:
-    """uint8 H×W×3 RGB -> float64 H×W BT.601 Y in [16, 235]."""
     img = img_uint8_rgb.astype(np.float64) / 255.0
     return np.dot(img, [65.481, 128.553, 24.966]) + 16.0
 
 
 def calculate_psnr(img: np.ndarray, img2: np.ndarray,
                    crop_border: int, test_y_channel: bool = False) -> float:
-    """Exact replica of BasicSR's calculate_psnr."""
     assert img.shape == img2.shape, f'shape mismatch: {img.shape} vs {img2.shape}'
     img = img.astype(np.float64)
     img2 = img2.astype(np.float64)
@@ -109,10 +87,9 @@ def calculate_psnr(img: np.ndarray, img2: np.ndarray,
 
 
 # =============================================================================
-# BasicSR-exact SSIM (Wang 2004 with 11x11 Gaussian σ=1.5)
+# BasicSR-exact SSIM (Wang 2004 with 11x11 Gaussian sigma=1.5)
 # =============================================================================
 def _ssim_single_channel(img: np.ndarray, img2: np.ndarray) -> float:
-    """Single-channel SSIM. Inputs are float64 in roughly [0, 255] range."""
     C1 = (0.01 * 255) ** 2
     C2 = (0.03 * 255) ** 2
     kernel = cv2.getGaussianKernel(11, 1.5)
@@ -121,8 +98,6 @@ def _ssim_single_channel(img: np.ndarray, img2: np.ndarray) -> float:
     img = img.astype(np.float64)
     img2 = img2.astype(np.float64)
 
-    # cv2.filter2D uses BORDER_REFLECT_101 by default, matching BasicSR.
-    # The [5:-5, 5:-5] crop removes invalid border pixels (kernel half-size).
     mu1 = cv2.filter2D(img, -1, window)[5:-5, 5:-5]
     mu2 = cv2.filter2D(img2, -1, window)[5:-5, 5:-5]
     mu1_sq = mu1 ** 2
@@ -139,10 +114,6 @@ def _ssim_single_channel(img: np.ndarray, img2: np.ndarray) -> float:
 
 def calculate_ssim(img: np.ndarray, img2: np.ndarray,
                    crop_border: int, test_y_channel: bool = False) -> float:
-    """Exact replica of BasicSR's calculate_ssim.
-
-    For RGB mode, computes SSIM per-channel and averages (BasicSR convention).
-    """
     assert img.shape == img2.shape, f'shape mismatch: {img.shape} vs {img2.shape}'
     img = img.astype(np.float64)
     img2 = img2.astype(np.float64)
@@ -161,7 +132,7 @@ def calculate_ssim(img: np.ndarray, img2: np.ndarray,
 
 
 # =============================================================================
-# Patch-wise inference, ported from PFTModel.test()
+# Patch-wise inference, ported from SFMformerModel.test()
 # =============================================================================
 @torch.no_grad()
 def patchwise_test(model: torch.nn.Module, lq: torch.Tensor,
@@ -283,8 +254,8 @@ def main():
             return
 
     print('[1/3] Building model...')
-    from basicsr.archs.pft_arch import PFT
-    model = PFT(upscale=args.scale, **PFT_LIGHT_CONFIG)
+    from basicsr.archs.sfmformer_arch import SFMformer
+    model = SFMformer(upscale=args.scale, **SFMFORMER_LIGHT_CONFIG)
     n_params = sum(p.numel() for p in model.parameters())
     print(f'  Parameters: {n_params/1e3:.1f}K ({n_params/1e6:.2f}M)')
 
