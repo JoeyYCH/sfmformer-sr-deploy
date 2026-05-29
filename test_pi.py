@@ -1,4 +1,22 @@
+"""
+test_pi.py
+================
+Phase 2 PSNR/SSIM validation on Pi: load GPU-trained checkpoint, reproduce
+paper numbers using SFMformer's exact patch-wise inference and BasicSR's
+exact PSNR/SSIM formulas.
 
+Two key behaviours that must mirror the original training/testing pipeline:
+
+  1. Patch-wise inference with overlap, exactly as `SFMformerModel.test()` does.
+  2. PSNR / SSIM identical to BasicSR's `calculate_psnr` / `calculate_ssim`
+     with `test_y_channel=True` (the standard SR community convention).
+
+Usage
+-----
+    python test_pi.py --scale 2                    # Set5 x2 default
+    python test_pi.py --scale 2 --benchmark Set14
+    python test_pi.py --scale 4 --save             # also save SR images
+"""
 from __future__ import annotations
 
 import argparse

@@ -11,23 +11,14 @@ Design choices that differ from test_pi.py:
   * No HR ground-truth required.
   * No PSNR/SSIM computation.
   * Supports a single image OR a directory of images.
-  * Output filenames append the model task + scale suffix, mirroring the
-    convention used in your original GPU `inference.py`.
-  * Patch-wise inference (PFTModel.test()) is still used so output quality
+  * Patch-wise inference (SFMformerModel.test()) is still used so output quality
     matches paper numbers.
 
 Usage
 -----
-    # Single image
     python inference_pi.py -i input.png -o results/ --scale 2
-
-    # Directory of images
     python inference_pi.py -i ./my_lr_images/ -o ./my_sr_results/ --scale 2
-
-    # Different scale factors
     python inference_pi.py -i input.png --scale 4
-
-    # Time the inference
     python inference_pi.py -i input.png --scale 2 --time
 """
 from __future__ import annotations
@@ -46,10 +37,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).parent))
 
 
-# =============================================================================
-# Model config -- mirrors options/test/PFT/test_PFT_lightweight.yml exactly.
-# =============================================================================
-PFT_LIGHT_CONFIG = dict(
+SFMFORMER_LIGHT_CONFIG = dict(
     in_chans=3,
     img_size=64,
     embed_dim=52,
@@ -73,36 +61,27 @@ PFT_LIGHT_CONFIG = dict(
 )
 
 CHECKPOINT_MAP = {
-    2: '101_PFT_light_SRx2_scratch(DFE_WMA)v2.pth',
-    3: '102_PFT_light_SRx3_finetune(DFE_WMA)v2.pth',
-    4: '103_PFT_light_SRx4_finetune(DFE_WMA)v2.pth',
+    2: '101_SFMformer_SRx2_scratch.pth',
+    3: '102_SFMformer_SRx3_finetune.pth',
+    4: '103_SFMformer_SRx4_finetune.pth',
 }
 
 
-# =============================================================================
-# Image <-> tensor helpers
-# =============================================================================
 def img2tensor(img_pil: Image.Image) -> torch.Tensor:
-    """PIL Image (RGB)  ->  float32 (1, 3, H, W) in [0, 1]."""
     arr = np.array(img_pil.convert('RGB'))
     t = torch.from_numpy(arr).permute(2, 0, 1).float() / 255.0
     return t.unsqueeze(0)
 
 
 def tensor2img(t: torch.Tensor) -> Image.Image:
-    """float (1, 3, H, W) in [0, 1]  ->  PIL Image RGB."""
     arr = t.squeeze(0).clamp(0, 1).permute(1, 2, 0).cpu().numpy()
     arr = (arr * 255.0).round().astype(np.uint8)
     return Image.fromarray(arr)
 
 
-# =============================================================================
-# Patch-wise inference, ported from PFTModel.test() in pft_model.py.
-# =============================================================================
 @torch.no_grad()
 def patchwise_test(model: torch.nn.Module, lq: torch.Tensor,
                    scale: int) -> torch.Tensor:
-    """Tile + 10% overlap inference, identical to training-time validation."""
     _, C, h, w = lq.size()
     split_token_h = h // 256 + 1
     split_token_w = w // 256 + 1
@@ -156,9 +135,6 @@ def patchwise_test(model: torch.nn.Module, lq: torch.Tensor,
     return out
 
 
-# =============================================================================
-# Checkpoint loading
-# =============================================================================
 def load_state_dict_flexibly(model: torch.nn.Module, ckpt_path: str) -> None:
     raw = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     if isinstance(raw, dict):
@@ -177,12 +153,8 @@ def load_state_dict_flexibly(model: torch.nn.Module, ckpt_path: str) -> None:
     print('  Strict load OK')
 
 
-# =============================================================================
-# Process one image
-# =============================================================================
 def process_image(model: torch.nn.Module, in_path: Path, out_path: Path,
                   scale: int, verbose: bool = True, timed: bool = False) -> None:
-    """Read LR, run patch-wise SR, save SR result."""
     img_lr = Image.open(in_path).convert('RGB')
     if verbose:
         print(f'  {in_path.name}  ({img_lr.size[0]}x{img_lr.size[1]})  -> ', end='', flush=True)
@@ -203,14 +175,11 @@ def process_image(model: torch.nn.Module, in_path: Path, out_path: Path,
             print()
 
 
-# =============================================================================
-# Main
-# =============================================================================
 SUPPORTED_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}
 
 
 def main():
-    ap = argparse.ArgumentParser(description='PFT-light single-image SR (Pi 5 CPU)')
+    ap = argparse.ArgumentParser(description='SFMformer single-image SR (Pi 5 CPU)')
     ap.add_argument('-i', '--in_path', type=str, required=True,
                     help='Input image file OR directory')
     ap.add_argument('-o', '--out_path', type=str, default='results/',
@@ -241,10 +210,9 @@ def main():
         print(f'[ERROR] Input not found: {in_path}')
         return
 
-    # ----- Build model -----
-    print(f'Building PFT-light x{args.scale}...')
-    from basicsr.archs.pft_arch import PFT
-    model = PFT(upscale=args.scale, **PFT_LIGHT_CONFIG)
+    print(f'Building SFMformer x{args.scale}...')
+    from basicsr.archs.sfmformer_arch import SFMformer
+    model = SFMformer(upscale=args.scale, **SFMFORMER_LIGHT_CONFIG)
     n_params = sum(p.numel() for p in model.parameters())
     print(f'  Parameters: {n_params/1e3:.1f}K ({n_params/1e6:.2f}M)')
 
@@ -252,7 +220,6 @@ def main():
     load_state_dict_flexibly(model, str(ckpt_path))
     model.eval()
 
-    # ----- Collect input file list -----
     if in_path.is_dir():
         files = sorted([p for p in in_path.iterdir()
                         if p.suffix.lower() in SUPPORTED_EXTS])
@@ -264,11 +231,9 @@ def main():
         files = [in_path]
         print(f'\nProcessing 1 image: {in_path.name} ...')
 
-    # ----- Run inference -----
     total_t0 = time.perf_counter()
     for f in files:
-        # Output name: <stem>_PFT_light_SRx<N><suffix>
-        out_name = f'{f.stem}_PFT_light_SRx{args.scale}{f.suffix}'
+        out_name = f'{f.stem}_SFMformer_SRx{args.scale}{f.suffix}'
         out_path = out_dir / out_name
         process_image(model, f, out_path, scale=args.scale, timed=args.time)
 
