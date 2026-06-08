@@ -32,6 +32,9 @@ Then the rest:
 pip install -r requirements.txt
 ```
 
+## Models
+You can downlaod pretrained models in https://drive.google.com/drive/folders/13xxMaTwbKoBIJVuUaaGjb1naCsxnM8-k?usp=sharing
+
 ## Usage
 
 ### Inference (just run)
@@ -92,7 +95,7 @@ sfmformer-sr-deploy/
   title={...},
   author={...},
   booktitle={...},
-  year={2025}
+  year={2026}
 }
 ```
 
