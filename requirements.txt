@@ -1,0 +1,8 @@
+numpy
+opencv-python
+pillow
+PyQt6
+psutil
+einops
+pywavelets
+fairscale
