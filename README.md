@@ -29,7 +29,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 Then the rest:
 
 ```bash
-pip install numpy opencv-python pillow PyQt6 psutil einops pywavelets fairscale
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -81,6 +81,7 @@ sfmformer-sr-deploy/
 │   ├── idynamicdwconv_util.py      # dynamic depth-wise conv
 │   └── arch_util.py
 ├── experiments/pretrained_models/  # 101_x2 / 102_x3 / 103_x4 .pth
+├── requirements.txt
 └── LICENSE.txt
 ```
 
