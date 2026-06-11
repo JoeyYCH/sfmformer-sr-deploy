@@ -2,17 +2,8 @@
 
 Deployment of **SFMformer** — a lightweight (0.97M-parameter) Transformer for single-image super-resolution. Runs on a GPU (Windows/Linux) or CPU-only on edge devices such as the Raspberry Pi 5; the same code auto-selects the device.
 
-## Benchmark Results
+This repository is the inference / deployment interface for the main SFMformer project: JoeyYCH/sfmformer. See that repo for the training code, full benchmark results, and the paper.
 
-PSNR (dB) ↑ / SSIM ↑ on the standard SR test sets (Y-channel), at ×2 / ×3 / ×4.
-
-| Dataset  | ×2              | ×3              | ×4              |
-|----------|-----------------|-----------------|-----------------|
-| Set5     | 38.40 / 0.9620  | 34.88 / 0.9311  | 32.70 / 0.9009  |
-| Set14    | 34.20 / 0.9227  | 30.79 / 0.8500  | 28.98 / 0.7900  |
-| BSD100   | 32.45 / 0.9032  | 29.38 / 0.8125  | 27.82 / 0.7450  |
-| Urban100 | 33.53 / 0.9397  | 29.37 / 0.8744  | 27.13 / 0.8158  |
-| Manga109 | 39.73 / 0.9794  | 34.88 / 0.9516  | 31.65 / 0.9212  |
 
 ## Install
 
